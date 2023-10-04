@@ -1,0 +1,2 @@
+all:
+	gcc -DSPLINTERDB_PLATFORM_DIR=platform_linux -g -O3 examples/test.c -I ./install/include -L ./install/lib -lsplinterdb
