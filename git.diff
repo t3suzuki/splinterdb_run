@@ -1,0 +1,142 @@
+diff --git a/Makefile b/Makefile
+index fcbe4a1..12f4a2d 100644
+--- a/Makefile
++++ b/Makefile
+@@ -86,9 +86,9 @@ ifeq ($(cpu_arch),x86_64)
+   CFLAGS += -march=native
+ endif
+ 
+-LDFLAGS += -ggdb3 -pthread
++LDFLAGS += -lpthread
+ 
+-LIBS      = -lm -lpthread -laio -lxxhash
++LIBS      = -L$(LIBDIR) -lsplinterdb -lm -lpthread -laio -lxxhash
+ DEPFLAGS  = -MMD -MP
+ 
+ #*************************************************************#
+@@ -260,7 +260,9 @@ EXAMPLES_BINS=$(EXAMPLES_BIN_SRC:$(EXAMPLES_DIR)/%_example.c=$(BINDIR)/$(EXAMPLE
+ ####################################################################
+ # The main targets
+ #
+-all: libs all-tests all-examples $(EXTRA_TARGETS)
++sub: all-tests all-examples $(EXTRA_TARGETS)
++all: libs
++	make sub
+ libs: $(LIBDIR)/libsplinterdb.so $(LIBDIR)/libsplinterdb.a
+ all-tests: $(BINDIR)/driver_test $(BINDIR)/unit_test $(UNIT_TESTBINS)
+ all-examples: $(EXAMPLES_BINS)
+@@ -351,7 +353,7 @@ $(LIBDIR)/libsplinterdb.a : $(OBJ) | $$(@D)/. $(CONFIG_FILE)
+ -include $(SRC:%.c=$(OBJDIR)/%.d) $(TESTSRC:%.c=$(OBJDIR)/%.d)
+ 
+ # Dependencies for the main executables
+-$(BINDIR)/driver_test: $(FUNCTIONAL_TESTOBJ) $(COMMON_TESTOBJ) $(LIBDIR)/libsplinterdb.so
++$(BINDIR)/driver_test: $(FUNCTIONAL_TESTOBJ) $(COMMON_TESTOBJ)
+ $(BINDIR)/unit_test: $(FAST_UNIT_TESTOBJS) $(COMMON_TESTOBJ) $(COMMON_UNIT_TESTOBJ) $(LIBDIR)/libsplinterdb.so $(OBJDIR)/$(FUNCTIONAL_TESTSDIR)/test_async.o
+ 
+ #################################################################
+@@ -553,7 +555,7 @@ test-results: all-tests
+ run-examples: all-examples
+ 		for i in $(EXAMPLES_BINS); do $$i || exit; done
+ 
+-INSTALL_PATH ?= /usr/local
++INSTALL_PATH ?= /home/tomoya-s/mountpoint/tomoya-s/splinterdb/install
+ 
+ install: $(LIBDIR)/libsplinterdb.so $(LIBDIR)/libsplinterdb.a
+ 	mkdir -p $(INSTALL_PATH)/include/splinterdb $(INSTALL_PATH)/lib
+diff --git a/scripts/run_ycsb.py b/scripts/run_ycsb.py
+index ad56fb3..3392d12 100755
+--- a/scripts/run_ycsb.py
++++ b/scripts/run_ycsb.py
+@@ -154,7 +154,7 @@ for mem in MEM_SIZES:
+                     start_diskstats = get_io_stats(DEVICE)
+ 
+                 # prepare the workload command
+-                run_command = ["./bin/driver_test", "ycsb_test"]
++                run_command = ["../bin/driver_test", "ycsb_test"]
+                 data_prefix = results_dir + "/data"
+                 run_command.append(data_prefix)
+                 run_command.append(trace_filename)
+diff --git a/src/clockcache.c b/src/clockcache.c
+index 7060b4e..4709bea 100644
+--- a/src/clockcache.c
++++ b/src/clockcache.c
+@@ -1600,6 +1600,29 @@ clockcache_move_hand(clockcache *cc, bool32 is_urgent)
+  *      returns a free page with given status and ref count.
+  *----------------------------------------------------------------------
+  */
++
++#include <execinfo.h>
++
++void
++print_bt()
++{
++  size_t i;
++  void *trace[128];
++  char **ss_trace;
++  size_t size = backtrace(trace, sizeof(trace) / sizeof(trace[0]));
++  ss_trace = backtrace_symbols(trace, size);
++  if (ss_trace == NULL) {
++    /*Failure*/
++    return;
++  }
++  
++  for (i = 0; i < size; i++) {
++    platform_default_log("%s\n", ss_trace[i]);
++  }
++  //free(ss_trace);
++  //fflush(0);
++}
++
+ uint32
+ clockcache_get_free_page(clockcache *cc,
+                          uint32      status,
+@@ -1667,6 +1690,7 @@ clockcache_get_free_page(clockcache *cc,
+                            num_passes,
+                            platform_timestamp_elapsed(wait_start));
+       clockcache_print(Platform_default_log_handle, cc);
++      print_bt();
+       platform_assert(0);
+    }
+ 
+@@ -2224,14 +2248,12 @@ clockcache_get_internal(clockcache   *cc,       // IN
+ 
+    /* Set up the page */
+    entry->page.disk_addr = addr;
+-   if (cc->cfg->use_stats) {
+-      start = platform_get_timestamp();
+-   }
+ 
+    status = io_read(cc->io, entry->page.data, clockcache_page_size(cc), addr);
+    platform_assert_status_ok(status);
+ 
+    if (cc->cfg->use_stats) {
++      start = platform_get_timestamp();
+       elapsed = platform_timestamp_elapsed(start);
+       cc->stats[tid].cache_misses[type]++;
+       cc->stats[tid].page_reads[type]++;
+diff --git a/src/trunk.c b/src/trunk.c
+index bcd75ab..0a91370 100644
+--- a/src/trunk.c
++++ b/src/trunk.c
+@@ -4586,6 +4586,7 @@ trunk_room_to_flush(trunk_handle     *spl,
+    uint16 child_subbundles = trunk_subbundle_count(spl, child);
+    uint16 flush_subbundles =
+       trunk_pivot_subbundle_count(spl, parent, pdata) + 1;
++   platform_default_log("%d + %d < %lu\n", child_branches, flush_branches, spl->cfg.hard_max_branches_per_node);
+    return child_branches + flush_branches < spl->cfg.hard_max_branches_per_node
+           && child_bundles + 2 <= TRUNK_MAX_BUNDLES
+           && child_subbundles + flush_subbundles + 1 < TRUNK_MAX_SUBBUNDLES;
+diff --git a/tests/functional/ycsb_test.c b/tests/functional/ycsb_test.c
+index 01f87f0..453331d 100644
+--- a/tests/functional/ycsb_test.c
++++ b/tests/functional/ycsb_test.c
+@@ -549,6 +549,9 @@ parse_ycsb_log_file(void *arg)
+    random_init(&rs, req->start_line, 0);
+ 
+    char *filename = req->filename;
++   printf("myfile %s\n", filename);
++   fflush(0);
++   
+    FILE *fp       = fopen(filename, "r");
+    if (fp == NULL) {
+       platform_default_log("failed to open file\n");
