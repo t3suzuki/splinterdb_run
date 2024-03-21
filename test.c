@@ -1,22 +1,28 @@
+#define _GNU_SOURCE
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
 
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+
 #include "splinterdb/default_data_config.h"
 #include "splinterdb/splinterdb.h"
 
-#define DB_FILE_NAME    "my_db"
-#define DB_FILE_SIZE_MB 8192ULL
-#define CACHE_SIZE_MB   64
+#define DB_FILE_NAME    "/home/tomoya-s/mountpoint/tomoya-s/my_db"
+#define DB_FILE_SIZE_MB 65536ULL
+#define CACHE_SIZE_MB   1024ULL
 
 #define USER_MAX_KEY_SIZE ((int)100)
 
-#define KEY_SIZE (20)
-#define VAL_SIZE (80)
+#define KEY_SIZE (16)
+#define VAL_SIZE (128)
 
 #define N_TH (2)
-#define N_ITEM (1024*512)
+#define N_ITEM (16*1024*1024)
 
 char enc_map[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!?";
 void
@@ -48,21 +54,23 @@ lookup_worker(void *arg)
    splinterdb_lookup_result_init(spl_handle, &result, 0, NULL);
    int rc;
    int ok = 0;
-   for (int i=0; i<N_ITEM; i++) {
-     int r = rand() % N_ITEM;
-     enc(key_buffer, r);
-     slice key = slice_create(KEY_SIZE, key_buffer);
-     slice val;
-     rc = splinterdb_lookup(spl_handle, key, &result);
-     rc = splinterdb_lookup_result_value(&result, &val);
-     if (!rc) {
-       enc(val_buffer, r);
-       if (memcmp(slice_data(val), val_buffer, VAL_SIZE) != 0) {
-	 printf("Found mykey: '%s', value: %s\n",
-		key_buffer,
-		(char *)slice_data(val));
-       } else {
-	 ok++;
+   for (int i_loop=0; i_loop=8; i_loop++) {
+     for (int i=0; i<N_ITEM; i++) {
+       int r = rand() % N_ITEM;
+       enc(key_buffer, r);
+       slice key = slice_create(KEY_SIZE, key_buffer);
+       slice val;
+       rc = splinterdb_lookup(spl_handle, key, &result);
+       rc = splinterdb_lookup_result_value(&result, &val);
+       if (!rc) {
+	 enc(val_buffer, r);
+	 if (memcmp(slice_data(val), val_buffer, VAL_SIZE) != 0) {
+	   printf("Found mykey: '%s', value: %s\n",
+		  key_buffer,
+		  (char *)slice_data(val));
+	 } else {
+	   ok++;
+	 }
        }
      }
    }
@@ -72,6 +80,8 @@ lookup_worker(void *arg)
 int
 main()
 {
+  platform_set_log_streams(stdout, stderr);
+  
    data_config splinter_data_cfg;
    default_data_config_init(USER_MAX_KEY_SIZE, &splinter_data_cfg);
 
@@ -81,6 +91,7 @@ main()
    splinterdb_cfg.disk_size  = (DB_FILE_SIZE_MB * 1024 * 1024);
    splinterdb_cfg.cache_size = (CACHE_SIZE_MB * 1024 * 1024);
    splinterdb_cfg.data_cfg   = &splinter_data_cfg;
+   splinterdb_cfg.io_flags = O_RDWR | O_CREAT;
 
    splinterdb *spl_handle = NULL; // To a running SplinterDB instance
 
@@ -101,6 +112,8 @@ main()
    }
 
 
+   printf("run workers\n");
+   
    pthread_t pth[N_TH];
    arg_t arg[N_TH];
    for (int i_th=0; i_th<N_TH; i_th++) {
